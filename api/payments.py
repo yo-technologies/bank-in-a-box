@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from typing import Optional
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import uuid
 
 from database import get_db
@@ -147,9 +147,9 @@ async def create_payment(
     - Комиссия не взимается
     - Все валюты конвертируются по курсу 1:1 для упрощения
     """
-    if not current_client:
+    if not token_data:
         raise HTTPException(401, "Unauthorized")
-    
+
     # Проверка согласия для межбанковых запросов
     payment_consent_id_to_store = None
     if x_requesting_bank:
@@ -215,13 +215,25 @@ async def create_payment(
         remittance = initiation.get("remittanceInformation", {})
         description = remittance.get("unstructured", "") if remittance else ""
     
+    # Валидация суммы платежа
+    try:
+        amount = Decimal(str(amount_data.get("amount", "0")))
+    except (InvalidOperation, TypeError):
+        raise HTTPException(400, "Invalid amount format")
+
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+
+    if not debtor_account.get("identification") or not creditor_account.get("identification"):
+        raise HTTPException(400, "debtorAccount and creditorAccount identification are required")
+
     try:
         # Инициировать платеж
         payment, interbank = await PaymentService.initiate_payment(
             db=db,
             from_account_number=debtor_account.get("identification"),
             to_account_number=creditor_account.get("identification"),
-            amount=Decimal(amount_data.get("amount", "0")),
+            amount=amount,
             description=description,
             payment_consent_id=payment_consent_id_to_store
         )
@@ -276,9 +288,9 @@ async def get_payment(
     OpenBanking Russia Payments API
     GET /payments/{paymentId}
     """
-    if not current_client:
+    if not token_data:
         raise HTTPException(401, "Unauthorized")
-    
+
     payment = await PaymentService.get_payment(db, payment_id)
     
     if not payment:

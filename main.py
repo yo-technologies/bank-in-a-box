@@ -16,10 +16,10 @@ try:
     from .models import Base
     from .middleware import APILoggingMiddleware
     from .api import (
-        accounts, auth, consents, payments, admin, products, well_known, 
+        accounts, auth, consents, payments, admin, products, well_known,
         banker, product_agreements, product_agreement_consents,
         product_applications, customer_leads, product_offers, product_offer_consents,
-        vrp_consents, vrp_payments, interbank, payment_consents, cards
+        vrp_consents, vrp_payments, interbank, payment_consents, multibank_proxy, cards
     )
 except ImportError:
     # Абсолютный импорт (для прямого запуска)

@@ -35,15 +35,24 @@ class PaymentService:
         Returns:
             (Payment, InterbankTransfer или None)
         """
+        # Сумма перевода должна быть строго положительной.
+        # Иначе отрицательная сумма развернула бы поток средств
+        # (списание превратилось бы в зачисление отправителю).
+        if amount is None or amount <= 0:
+            raise ValueError("Amount must be positive")
+
+        if from_account_number == to_account_number:
+            raise ValueError("Source and destination accounts must differ")
+
         # Найти счет отправителя
         result = await db.execute(
             select(Account).where(Account.account_number == from_account_number)
         )
         from_account = result.scalar_one_or_none()
-        
+
         if not from_account:
             raise ValueError("Source account not found")
-        
+
         if from_account.balance < amount:
             raise ValueError("Insufficient funds")
         
@@ -84,20 +93,20 @@ class PaymentService:
             # Создать транзакцию для отправителя (Debit - списание)
             transaction_debit = Transaction(
                 account_id=from_account.id,
-                transaction_type="Debit",
+                transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
                 amount=amount,
-                balance_after=from_account.balance,
+                direction="debit",
                 description=f"Перевод на счет {to_account_number}: {description}",
                 transaction_date=datetime.utcnow()
             )
             db.add(transaction_debit)
-            
+
             # Создать транзакцию для получателя (Credit - зачисление)
             transaction_credit = Transaction(
                 account_id=to_account.id,
-                transaction_type="Credit",
+                transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
                 amount=amount,
-                balance_after=to_account.balance,
+                direction="credit",
                 description=f"Перевод от счета {from_account_number}: {description}",
                 transaction_date=datetime.utcnow()
             )
@@ -132,9 +141,9 @@ class PaymentService:
             # Создать транзакцию для отправителя (Debit - списание)
             transaction_debit = Transaction(
                 account_id=from_account.id,
-                transaction_type="Debit",
+                transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
                 amount=amount,
-                balance_after=from_account.balance,
+                direction="debit",
                 description=f"Межбанковский перевод в {target_bank} на счет {to_account_number}: {description}",
                 transaction_date=datetime.utcnow()
             )
@@ -179,9 +188,9 @@ class PaymentService:
                     # Создать корректирующую транзакцию (возврат)
                     transaction_refund = Transaction(
                         account_id=from_account.id,
-                        transaction_type="Credit",
+                        transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
                         amount=amount,
-                        balance_after=from_account.balance,
+                        direction="credit",
                         description=f"Возврат неудачного перевода в {target_bank}",
                         transaction_date=datetime.utcnow()
                     )
@@ -201,9 +210,9 @@ class PaymentService:
                 # Создать корректирующую транзакцию (возврат)
                 transaction_refund = Transaction(
                     account_id=from_account.id,
-                    transaction_type="Credit",
+                    transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
                     amount=amount,
-                    balance_after=from_account.balance,
+                    direction="credit",
                     description=f"Возврат из-за ошибки межбанковского перевода: {str(e)}",
                     transaction_date=datetime.utcnow()
                 )

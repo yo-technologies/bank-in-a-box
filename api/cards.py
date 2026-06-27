@@ -11,10 +11,10 @@ from decimal import Decimal
 import uuid
 import random
 
-from ..database import get_db
-from ..models import Card, Account, Client
-from ..services.auth_service import require_any_token, require_client
-from ..services.consent_service import ConsentService
+from database import get_db
+from models import Card, Account, Client
+from services.auth_service import require_any_token, require_client
+from services.consent_service import ConsentService
 
 
 router = APIRouter(prefix="/cards", tags=["8 Карты"])
@@ -69,7 +69,7 @@ def generate_card_number(bank_code: str) -> str:
         'sbank': '427630'
     }
     
-    from ..config import config
+    from config import config
     bin_code = bins.get(config.BANK_CODE, '427600')
     
     # 9 случайных цифр
@@ -367,7 +367,7 @@ async def create_card(
         raise HTTPException(400, "Invalid card_type. Must be 'debit' or 'credit'")
     
     # Генерировать номер карты
-    from ..config import config
+    from config import config
     card_number = generate_card_number(config.BANK_CODE)
     
     # Проверить уникальность

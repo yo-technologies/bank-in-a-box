@@ -11,10 +11,10 @@ from pydantic import BaseModel
 from decimal import Decimal
 import uuid
 
-from ..database import get_db
-from ..models import Account, Client, Transaction, BankCapital, Merchant, Card
-from ..services.auth_service import require_any_token, require_client
-from ..services.consent_service import ConsentService
+from database import get_db
+from models import Account, Client, Transaction, BankCapital, Merchant, Card
+from services.auth_service import require_any_token, require_client
+from services.consent_service import ConsentService
 from sqlalchemy.orm import selectinload
 
 
@@ -802,7 +802,7 @@ async def close_account_with_balance(
         
     elif request.action == "donate":
         # Подарить банку (увеличить capital)
-        from ..config import config
+        from config import config
         
         capital_result = await db.execute(
             select(BankCapital).where(BankCapital.bank_code == config.BANK_CODE)

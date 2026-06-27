@@ -82,7 +82,10 @@ async def receive_interbank_transfer(
     
     try:
         amount = Decimal(request.amount)
-        
+
+        if amount <= 0:
+            raise HTTPException(400, "Amount must be positive")
+
         # 1. Найти счет получателя
         result = await db.execute(
             select(Account).where(Account.account_number == request.to_account_number)
@@ -98,9 +101,9 @@ async def receive_interbank_transfer(
         # 3. Создать транзакцию (Credit - зачисление)
         transaction = Transaction(
             account_id=to_account.id,
-            transaction_type="Credit",
+            transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
             amount=amount,
-            balance_after=to_account.balance,
+            direction="credit",
             description=f"Входящий перевод из {request.from_bank}: {request.description}",
             transaction_date=datetime.utcnow()
         )
