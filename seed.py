@@ -1,14 +1,20 @@
 """
 Идемпотентный сидинг демо-данных при старте приложения.
 
-Сид выполняется через ORM-модели (а не через сырой SQL), поэтому схема
-БД всегда совпадает с моделями — это убирает рассинхронизацию, которая
-возникала при использовании частичного init.sql вместе с create_all.
+Минимальный детерминированный сид (НЕ рандомный) для демонстрации:
+несколько клиентов одной команды + по счёту у каждого, капитал банка и
+авто-одобрение согласий. Выполняется через ORM, поэтому схема БД всегда
+совпадает с моделями.
 
-Данные параметризованы кодом банка (config.BANK_CODE), чтобы можно было
-поднять несколько банков из одного образа: у каждого банка свой диапазон
-номеров счетов (различающая цифра в 7-й позиции), но одни и те же person_id
-клиентов — это позволяет демонстрировать межбанковские переводы и агрегацию.
+Параметризация через env:
+  TEAM_CLIENT_ID      — код команды (например, team218). По умолчанию team200.
+  TEAM_CLIENT_SECRET  — секрет команды для POST /auth/bank-token.
+  SEED_CLIENTS        — сколько клиентов завести (по умолчанию 2).
+  SEED_BALANCE        — стартовый баланс счёта (по умолчанию 1000000).
+
+person_id одинаковы во всех банках (team218-1, team218-2, …), но номера
+счетов различаются банком (цифра в 7-й позиции) — это позволяет
+демонстрировать межбанковские переводы между vbank/abank/sbank.
 """
 import os
 from decimal import Decimal
@@ -17,33 +23,30 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
-    from .models import Client, Account, BankCapital, BankSettings, Team, Product
+    from .models import Client, Account, BankCapital, BankSettings, Team
     from .config import config
 except ImportError:
-    from models import Client, Account, BankCapital, BankSettings, Team, Product
+    from models import Client, Account, BankCapital, BankSettings, Team
     from config import config
 
 
 # Различающая цифра банка в номере счёта (7-я позиция).
-# Для неизвестных банков берём 9 — лишь бы счета были уникальны в своей БД.
 BANK_DIGIT = {"vbank": "1", "abank": "2", "sbank": "3"}
 
-# Креды команды по умолчанию (совпадают с дефолтами multibank_proxy и README).
-DEFAULT_TEAM_ID = os.getenv("TEAM_CLIENT_ID", "team200")
-DEFAULT_TEAM_SECRET = os.getenv("TEAM_CLIENT_SECRET", "5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB")
+TEAM_ID = os.getenv("TEAM_CLIENT_ID", "team200")
+TEAM_SECRET = os.getenv("TEAM_CLIENT_SECRET", "5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB")
+SEED_CLIENTS = int(os.getenv("SEED_CLIENTS", "2"))
+SEED_BALANCE = Decimal(os.getenv("SEED_BALANCE", "1000000"))
 
 
 def _account_number(bank_digit: str, index: int) -> str:
-    """Сгенерировать 20-значный номер счёта, уникальный в рамках банка."""
+    """20-значный номер счёта, уникальный в рамках банка."""
     return f"408178{bank_digit}{index:013d}"
 
 
 async def seed_if_empty(session: AsyncSession) -> bool:
     """
-    Засидить демо-данные, если БД ещё пуста.
-
-    Returns:
-        True если сид выполнен, False если данные уже были.
+    Засидить демо-данные, если БД пуста. Returns True если сид выполнен.
     """
     existing = await session.execute(select(func.count(Client.id)))
     if (existing.scalar() or 0) > 0:
@@ -52,17 +55,17 @@ async def seed_if_empty(session: AsyncSession) -> bool:
     bank_code = config.BANK_CODE
     digit = BANK_DIGIT.get(bank_code, "9")
 
-    # --- Команда (для POST /auth/bank-token) ---
-    team = await session.execute(select(Team).where(Team.client_id == DEFAULT_TEAM_ID))
+    # Команда — для POST /auth/bank-token
+    team = await session.execute(select(Team).where(Team.client_id == TEAM_ID))
     if team.scalar_one_or_none() is None:
         session.add(Team(
-            client_id=DEFAULT_TEAM_ID,
-            client_secret=DEFAULT_TEAM_SECRET,
-            team_name=f"{DEFAULT_TEAM_ID} (seed)",
+            client_id=TEAM_ID,
+            client_secret=TEAM_SECRET,
+            team_name=f"{TEAM_ID} (seed)",
             is_active=True,
         ))
 
-    # --- Настройки банка: авто-одобрение согласий (turnkey межбанк) ---
+    # Авто-одобрение согласий — чтобы межбанк работал turnkey
     for key, value in [
         ("auto_approve_consents", "true"),
         ("auto_approve_payment_consents", "true"),
@@ -70,7 +73,7 @@ async def seed_if_empty(session: AsyncSession) -> bool:
     ]:
         session.add(BankSettings(key=key, value=value))
 
-    # --- Капитал банка ---
+    # Капитал банка
     session.add(BankCapital(
         bank_code=bank_code,
         capital=Decimal("3500000.00"),
@@ -79,63 +82,26 @@ async def seed_if_empty(session: AsyncSession) -> bool:
         total_loans=Decimal("0"),
     ))
 
-    # --- Клиенты команды (одинаковые person_id во всех банках) ---
-    index = 1
-    base_balances = [500000, 450000, 480000, 600000, 350000,
-                     320000, 550000, 280000, 750000, 420000]
-    for i in range(1, 11):
+    # Несколько клиентов команды + по счёту у каждого
+    for i in range(1, SEED_CLIENTS + 1):
         client = Client(
-            person_id=f"{DEFAULT_TEAM_ID}-{i}",
+            person_id=f"{TEAM_ID}-{i}",
             client_type="individual",
-            full_name=f"{DEFAULT_TEAM_ID} участник №{i}",
+            full_name=f"{TEAM_ID} клиент №{i}",
             segment="employee",
-            birth_year=1990 + (i % 10),
+            birth_year=1990,
             monthly_income=Decimal("100000"),
         )
         session.add(client)
         await session.flush()  # получить client.id
         session.add(Account(
             client_id=client.id,
-            account_number=_account_number(digit, index),
+            account_number=_account_number(digit, i),
             account_type="checking",
-            balance=Decimal(str(base_balances[i - 1])),
+            balance=SEED_BALANCE,
             currency="RUB",
             status="active",
         ))
-        index += 1
-
-    # --- Демо-клиенты ---
-    for i in range(1, 4):
-        client = Client(
-            person_id=f"{bank_code}-demo-{i}",
-            client_type="individual",
-            full_name=f"Демо клиент {bank_code} №{i}",
-            segment="employee",
-            birth_year=1985 + i,
-            monthly_income=Decimal("120000"),
-        )
-        session.add(client)
-        await session.flush()
-        session.add(Account(
-            client_id=client.id,
-            account_number=_account_number(digit, index),
-            account_type="checking",
-            balance=Decimal("300000.00"),
-            currency="RUB",
-            status="active",
-        ))
-        index += 1
-
-    # --- Базовый каталог продуктов ---
-    session.add_all([
-        Product(product_id=f"prod-{bank_code}-deposit-001", product_type="deposit",
-                name="Депозит", description="Срочный вклад", interest_rate=Decimal("9.00"),
-                min_amount=Decimal("10000"), term_months=12, is_active=True),
-        Product(product_id=f"prod-{bank_code}-loan-001", product_type="loan",
-                name="Кредит наличными", description="Потребительский кредит",
-                interest_rate=Decimal("13.50"), min_amount=Decimal("50000"),
-                term_months=24, is_active=True),
-    ])
 
     await session.commit()
     return True

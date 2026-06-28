@@ -1,19 +1,15 @@
-# Федерация из 3 банков (vbank / abank / sbank) для локального запуска.
+# Федерация из 3 банков за Traefik (один хост, домены через env).
 #
-# Запуск:   docker compose -f docker-compose.banks.yml up --build
-# Внешний доступ:
-#   - VBank: http://localhost:8001  (Swagger: /docs)
-#   - ABank: http://localhost:8002
-#   - SBank: http://localhost:8003
+# Запуск:
+#   cp .env.federation.example .env        # задай домены и креды команды
+#   docker compose -f docker-compose.traefik.yml up --build
 #
-# Каждый банк:
-#   - имеет собственную БД (vbank-db / abank-db / sbank-db);
-#   - сам сидит демо-данные при первом старте (см. seed.py);
-#   - ходит к соседям по имени сервиса (http://vbank:8000 и т.д.),
-#     поэтому межбанковские переводы работают «из коробки».
+# Traefik маршрутизирует по Host:
+#   https?://$VBANK_DOMAIN -> vbank, $ABANK_DOMAIN -> abank, $SBANK_DOMAIN -> sbank
+# По умолчанию домены *.localhost (резолвятся в 127.0.0.1 в браузере).
 #
-# Для доступа ИЗВНЕ (с другого хоста) меняй проброшенные порты и при
-# необходимости задавай INTERBANK_BANK_URLS с публичными адресами.
+# Межбанк ходит ВНУТРИ docker-сети по именам сервисов (http://vbank:8000),
+# наружу — по твоим доменам через Traefik. Менять INTERBANK_* не нужно.
 
 name: bank-federation
 
@@ -22,13 +18,10 @@ x-bank-env: &bank-env
   ALGORITHM: HS256
   ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
   API_VERSION: "2.1"
-  # Список банков федерации и шаблон адреса (имена сервисов == коды банков)
   KNOWN_BANKS: vbank,abank,sbank
   INTERBANK_URL_TEMPLATE: http://{code}:8000
   INTERBANK_TIMEOUT: "10"
-  # Общий секрет для аутентификации входящих межбанковских переводов
   INTERBANK_SHARED_SECRET: ${INTERBANK_SHARED_SECRET:-interbank-secret-change-me}
-  # Креды команды для POST /auth/bank-token (определяют person_id: team218-1, …)
   TEAM_CLIENT_ID: ${TEAM_CLIENT_ID:-team200}
   TEAM_CLIENT_SECRET: ${TEAM_CLIENT_SECRET:-5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB}
   SEED_CLIENTS: ${SEED_CLIENTS:-2}
@@ -49,6 +42,23 @@ x-bank-service: &bank-service
   restart: unless-stopped
 
 services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      # Дашборд (необязательно): http://localhost:8090/dashboard/
+      - --api.dashboard=true
+      - --api.insecure=true
+    ports:
+      - "80:80"
+      - "8090:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
   # ===== VBANK =====
   vbank-db:
     image: postgres:15-alpine
@@ -71,9 +81,12 @@ services:
       BANK_CODE: vbank
       BANK_NAME: Virtual Bank
       DATABASE_URL: postgresql://bankuser:bankpass@vbank-db:5432/vbank_db
-      PUBLIC_URL: http://localhost:8001
-    ports:
-      - "8001:8000"
+      PUBLIC_URL: http://${VBANK_DOMAIN:-vbank.localhost}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.vbank.rule=Host(`${VBANK_DOMAIN:-vbank.localhost}`)
+      - traefik.http.routers.vbank.entrypoints=web
+      - traefik.http.services.vbank.loadbalancer.server.port=8000
     depends_on:
       vbank-db:
         condition: service_healthy
@@ -100,9 +113,12 @@ services:
       BANK_CODE: abank
       BANK_NAME: Awesome Bank
       DATABASE_URL: postgresql://bankuser:bankpass@abank-db:5432/abank_db
-      PUBLIC_URL: http://localhost:8002
-    ports:
-      - "8002:8000"
+      PUBLIC_URL: http://${ABANK_DOMAIN:-abank.localhost}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.abank.rule=Host(`${ABANK_DOMAIN:-abank.localhost}`)
+      - traefik.http.routers.abank.entrypoints=web
+      - traefik.http.services.abank.loadbalancer.server.port=8000
     depends_on:
       abank-db:
         condition: service_healthy
@@ -129,9 +145,12 @@ services:
       BANK_CODE: sbank
       BANK_NAME: Super Bank
       DATABASE_URL: postgresql://bankuser:bankpass@sbank-db:5432/sbank_db
-      PUBLIC_URL: http://localhost:8003
-    ports:
-      - "8003:8000"
+      PUBLIC_URL: http://${SBANK_DOMAIN:-sbank.localhost}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.sbank.rule=Host(`${SBANK_DOMAIN:-sbank.localhost}`)
+      - traefik.http.routers.sbank.entrypoints=web
+      - traefik.http.services.sbank.loadbalancer.server.port=8000
     depends_on:
       sbank-db:
         condition: service_healthy

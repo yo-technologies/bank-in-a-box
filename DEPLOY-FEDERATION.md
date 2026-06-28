@@ -1,107 +1,122 @@
-# Запуск федерации из 3 банков
+# Запуск федерации из 3 банков (vbank / abank / sbank)
 
-Поднимает **vbank**, **abank**, **sbank**, каждый со своей БД, автосидингом
-демо-данных и рабочими межбанковскими переводами «из коробки».
+Турнкей-стенд для демонстрации: 3 банка, у каждого своя БД, рабочие
+межбанковские переводы и автосид демо-данных.
 
-## 1. Запуск
+## Какой вариант выбрать
+
+- **Отдельные инстансы** (как ты планировал) — оправданы, если банки реально
+  на разных хостах/доменах. Минус: 3 деплоя и 3 БД руками.
+- **Один хост + Traefik (рекомендую для демо)** — один `docker compose up`,
+  домены задаёшь через env. Меньше всего возни, judge-friendly.
+
+Оба варианта используют один и тот же образ; разница только в compose-файле.
+
+---
+
+## Вариант A. Один хост + Traefik (рекомендуется)
+
+Домены маршрутизируются Traefik по `Host`. По умолчанию `*.localhost`
+(резолвится в 127.0.0.1 в браузере), для прода подставь свои домены.
+
+```bash
+cp .env.federation.example .env     # задай домены, TEAM_CLIENT_ID, секреты
+docker compose -f docker-compose.traefik.yml up --build
+```
+
+| Банк  | URL (по умолчанию)        | Swagger              |
+|-------|---------------------------|----------------------|
+| VBank | http://vbank.localhost    | …/docs               |
+| ABank | http://abank.localhost    | …/docs               |
+| SBank | http://sbank.localhost    | …/docs               |
+
+Свои домены — просто в `.env`:
+
+```dotenv
+VBANK_DOMAIN=vbank.team218.ru
+ABANK_DOMAIN=abank.team218.ru
+SBANK_DOMAIN=sbank.team218.ru
+```
+
+(DNS этих доменов должен указывать на хост с Traefik; порт 80 открыт.)
+Дашборд Traefik: http://localhost:8090/dashboard/
+
+## Вариант B. Один хост, прямые порты (без Traefik)
 
 ```bash
 docker compose -f docker-compose.banks.yml up --build
 ```
 
-Доступ снаружи:
+| Банк  | URL                   |
+|-------|-----------------------|
+| VBank | http://localhost:8001 |
+| ABank | http://localhost:8002 |
+| SBank | http://localhost:8003 |
 
-| Банк  | URL                     | Swagger                       |
-|-------|-------------------------|-------------------------------|
-| VBank | http://localhost:8001   | http://localhost:8001/docs    |
-| ABank | http://localhost:8002   | http://localhost:8002/docs    |
-| SBank | http://localhost:8003   | http://localhost:8003/docs    |
+---
 
-Схема БД создаётся приложением (`create_all`), демо-данные сидятся
-автоматически при первом старте (`seed.py`) — никаких ручных SQL.
+## Сид (детерминированный, НЕ рандомный)
 
-## 2. Что засеяно (в каждом банке)
+Настраивается через env (см. `.env.federation.example`):
 
-- Команда `team200` / секрет `5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB`
-  (для `POST /auth/bank-token`).
-- Клиенты `team200-1 … team200-10` (одинаковые person_id во всех банках)
-  и по одному checking-счёту у каждого.
-- Авто-одобрение согласий (account + payment) — для turnkey-межбанка.
+| Переменная           | Назначение                                   | Дефолт   |
+|----------------------|----------------------------------------------|----------|
+| `TEAM_CLIENT_ID`     | код команды → person_id `team218-1, -2, …`   | team200  |
+| `TEAM_CLIENT_SECRET` | секрет для `POST /auth/bank-token` и логина  | —        |
+| `SEED_CLIENTS`       | сколько клиентов завести                      | 2        |
+| `SEED_BALANCE`       | стартовый баланс счёта                        | 1000000  |
 
-Номера счетов различаются банком (7-я цифра): vbank=`1`, abank=`2`, sbank=`3`.
+person_id одинаковы во всех банках, номера счетов различаются банком
+(7-я цифра: vbank=1, abank=2, sbank=3). При `TEAM_CLIENT_ID=team218`:
 
 | Клиент    | VBank счёт              | ABank счёт              |
 |-----------|-------------------------|-------------------------|
-| team200-1 | `40817810000000000001`  | `40817820000000000001`  |
-| team200-2 | `40817810000000000002`  | `40817820000000000002`  |
+| team218-1 | `40817810000000000001`  | `40817820000000000001`  |
+| team218-2 | `40817810000000000002`  | `40817820000000000002`  |
 
-## 3. Межбанковский перевод (пример)
+## Пример: межбанковский перевод
 
-Клиент vbank переводит со своего счёта на счёт в abank.
+Клиент vbank переводит со своего счёта на счёт в abank. Подставь свой
+`TEAM_CLIENT_SECRET` (он же пароль логина клиента команды) и хост банка.
 
 ```bash
-# 1) Логин клиента в VBank (пароль = секрет команды)
-TOKEN=$(curl -s http://localhost:8001/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"team200-1","password":"5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB"}' \
+BANK=http://vbank.localhost          # или http://localhost:8001 (вариант B)
+SECRET=change-me-team-secret
+
+TOKEN=$(curl -s $BANK/auth/login -H 'Content-Type: application/json' \
+  -d "{\"username\":\"team218-1\",\"password\":\"$SECRET\"}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
 
-# 2) Платёж в ABank (bank_code маршрутизирует перевод напрямую)
-curl -s -X POST http://localhost:8001/payments \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "data": {"initiation": {
-      "instructedAmount": {"amount": "1000.00", "currency": "RUB"},
-      "debtorAccount":   {"identification": "40817810000000000001"},
-      "creditorAccount": {"identification": "40817820000000000002", "bank_code": "abank"},
-      "comment": "Тестовый межбанк"
-    }}
-  }'
-```
-
-Проверить зачисление в ABank можно через его API/БД — баланс
-`40817820000000000002` вырастет на 1000.
-
-### TPP-сценарий (через согласие на платёж)
-
-Если инициирует не сам клиент, а стороннее приложение/банк:
-
-```bash
-# токен команды в банке-плательщике
-BTOKEN=$(curl -s -X POST "http://localhost:8001/auth/bank-token?client_id=team200&client_secret=5OAaa4DYzYKfnOU6zbR34ic5qMm7VSMB" | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-
-# согласие на платёж (auto-approve) -> вернёт consent_id (pcon-...)
-curl -s -X POST "http://localhost:8001/payment-consents/request?client_id=team200-1" \
-  -H "Authorization: Bearer $BTOKEN" -H 'x-requesting-bank: team200' \
-  -H 'Content-Type: application/json' \
+curl -s -X POST $BANK/payments \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"data":{"initiation":{
-        "instructedAmount":{"amount":"1000.00","currency":"RUB"},
-        "debtorAccount":{"identification":"40817810000000000001"},
-        "creditorAccount":{"identification":"40817820000000000002"}}}}'
-
-# затем POST /payments с заголовками x-requesting-bank + x-payment-consent-id
-# (debtor/creditor/сумма должны совпадать с согласием)
+    "instructedAmount":{"amount":"1000.00","currency":"RUB"},
+    "debtorAccount":  {"identification":"40817810000000000001"},
+    "creditorAccount":{"identification":"40817820000000000002","bank_code":"abank"},
+    "comment":"demo"
+  }}}'
 ```
 
-## 4. Доступ с другого хоста / в интернете
+Баланс `40817820000000000002` в ABank вырастет на 1000.
 
-- Порты `8001/8002/8003` уже проброшены на хост — доступны по IP машины.
-- Если банки живут на разных хостах, задай каждому реальные адреса соседей:
+## Доступ извне / межбанк между разными хостами
 
-  ```yaml
-  environment:
-    INTERBANK_BANK_URLS: >-
-      {"vbank":"https://vbank.example.com",
-       "abank":"https://abank.example.com",
-       "sbank":"https://sbank.example.com"}
-  ```
+Внутри одного compose банки ходят друг к другу по именам сервисов
+(`http://vbank:8000`) — менять ничего не нужно. Если банки на РАЗНЫХ хостах,
+задай каждому реальные адреса соседей:
 
-- `INTERBANK_SHARED_SECRET` должен совпадать у всех банков федерации —
-  он проверяется на входящих `/interbank/receive` и `/interbank/check-account`.
+```yaml
+environment:
+  INTERBANK_BANK_URLS: >-
+    {"vbank":"https://vbank.team218.ru",
+     "abank":"https://abank.team218.ru",
+     "sbank":"https://sbank.team218.ru"}
+```
 
-## 5. Сброс данных
+`INTERBANK_SHARED_SECRET` и `SECRET_KEY` должны совпадать у всех банков.
+
+## Сброс данных
 
 ```bash
-docker compose -f docker-compose.banks.yml down -v   # -v удаляет тома БД
+docker compose -f docker-compose.traefik.yml down -v   # -v удаляет тома БД
 ```
