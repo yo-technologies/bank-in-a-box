@@ -11,8 +11,17 @@ import uuid
 
 from database import get_db
 from models import Product, ConsentRequest, Client, Account, ProductAgreement
+from services.auth_service import require_banker
 
-router = APIRouter(prefix="/banker", tags=["Internal: Banker"], include_in_schema=False)
+# Весь /banker требует banker-токен (POST /auth/banker-login).
+# Раньше эндпоинты были открыты — любой мог читать балансы всех клиентов,
+# менять продукты/ставки и одобрять запросы согласий.
+router = APIRouter(
+    prefix="/banker",
+    tags=["Internal: Banker"],
+    include_in_schema=False,
+    dependencies=[Depends(require_banker)],
+)
 
 
 class ProductUpdate(BaseModel):
