@@ -263,7 +263,7 @@ async def create_payment_consent_request(
 @router.get("/{consent_id}", response_model=PaymentConsentResponse, summary="Получить согласие по ID")
 async def get_payment_consent(
     consent_id: str,
-    current_client: dict = Depends(require_client),
+    current_client: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -310,7 +310,7 @@ async def get_payment_consent(
 @router.delete("/{consent_id}", status_code=204, summary="Отозвать согласие")
 async def revoke_payment_consent(
     consent_id: str,
-    current_client: dict = Depends(require_client),
+    current_client: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """

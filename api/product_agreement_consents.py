@@ -258,7 +258,7 @@ async def create_product_agreement_consent_request(
 @router.get("/{consent_id}", response_model=dict, summary="Получить согласие по ID")
 async def get_product_agreement_consent(
     consent_id: str,
-    current_client: dict = Depends(require_client),
+    current_client: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -292,7 +292,7 @@ async def get_product_agreement_consent(
 @router.delete("/{consent_id}", status_code=204, summary="Отозвать согласие")
 async def revoke_product_agreement_consent(
     consent_id: str,
-    current_client: dict = Depends(require_client),
+    current_client: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
